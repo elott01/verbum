@@ -4,6 +4,8 @@
 	"private": true,
 	"scripts": {
 		"dev": "next dev",
+		"build:words": "node scripts/build-words.mjs",
+		"prebuild": "npm run build:words",
 		"build": "next build",
 		"start": "next start",
 		"lint": "eslint",
@@ -16,6 +18,7 @@
 		"next": "16.2.6",
 		"react": "19.2.4",
 		"react-dom": "19.2.4",
+		"seedrandom": "^3.0.5",
 		"zustand": "^5.0.13"
 	},
 	"devDependencies": {
@@ -26,6 +29,7 @@
 		"@types/node": "^20",
 		"@types/react": "^19",
 		"@types/react-dom": "^19",
+		"@types/seedrandom": "^3.0.8",
 		"@vitejs/plugin-react": "^6.0.1",
 		"eslint": "^9",
 		"eslint-config-next": "16.2.6",

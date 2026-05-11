@@ -1,62 +1,154 @@
 import { create } from 'zustand';
 import { evaluateGuess } from './evaluateGuess';
-import type { RunState } from './types';
+import { calculateScore, anteTargetScore } from './scoring';
+import { pickWord } from './rng';
+import { VALID_WORDS } from './words';
+import type { RunState, RoundResult } from './types';
 
-const TARGET = 'crane'; // hardcoded for Day 1
-const WORD_LENGTH = TARGET.length;
 const MAX_GUESSES = 6;
+const ROUNDS_PER_ANTE = 3;
+
+function generateSeed(): string {
+  return Date.now().toString(36);
+}
+
+function makeInitialState(seed: string): RunState {
+  const ante = 1;
+  const round = 1;
+  const target = pickWord(seed, ante, round);
+  return {
+    seed,
+    ante,
+    round,
+    targetScore: anteTargetScore(ante),
+    score: 0,
+    roundHistory: [],
+    target,
+    wordLength: target.length,
+    guessesRemaining: MAX_GUESSES,
+    history: [],
+    currentGuess: '',
+    phase: 'guessing',
+    lastRoundPoints: null,
+  };
+}
 
 type Actions = {
-	addLetter: (letter: string) => void;
-	deleteLetter: () => void;
-	submitGuess: () => void;
-	reset: () => void;
-};
-
-const initialState: RunState = {
-	target: TARGET,
-	wordLength: WORD_LENGTH,
-	guessesRemaining: MAX_GUESSES,
-	history: [],
-	currentGuess: '',
-	phase: 'guessing',
+  startRun: (seed?: string) => void;
+  addLetter: (letter: string) => void;
+  deleteLetter: () => void;
+  submitGuess: () => void;
+  nextRound: () => void;  // called from the round_complete screen
 };
 
 export const useGameStore = create<RunState & Actions>((set) => ({
-	...initialState,
+  ...makeInitialState(generateSeed()),
 
-	addLetter: (letter) =>
-		set((state) => {
-			if (state.phase !== 'guessing') return state;
-			if (state.currentGuess.length >= state.wordLength) return state;
-			if (!/^[a-zA-Z]$/.test(letter)) return state;
-			return { currentGuess: state.currentGuess + letter.toLowerCase() };
-		}),
+  startRun: (seed) => set(makeInitialState(seed ?? generateSeed())),
 
-	deleteLetter: () =>
-		set((state) => {
-			if (state.phase !== 'guessing') return state;
-			return { currentGuess: state.currentGuess.slice(0, -1) };
-		}),
+  addLetter: (letter) =>
+    set((state) => {
+      if (state.phase !== 'guessing') return state;
+      if (state.currentGuess.length >= state.wordLength) return state;
+      if (!/^[a-zA-Z]$/.test(letter)) return state;
+      return { currentGuess: state.currentGuess + letter.toLowerCase() };
+    }),
 
-	submitGuess: () =>
-		set((state) => {
-			if (state.phase !== 'guessing') return state;
-			if (state.currentGuess.length !== state.wordLength) return state;
+  deleteLetter: () =>
+    set((state) => {
+      if (state.phase !== 'guessing') return state;
+      return { currentGuess: state.currentGuess.slice(0, -1) };
+    }),
 
-			const result = evaluateGuess(state.currentGuess, state.target);
-			const history = [...state.history, { word: state.currentGuess, result }];
-			const guessesRemaining = state.guessesRemaining - 1;
-			const won = result.every((r) => r.status === 'correct');
+  submitGuess: () =>
+    set((state) => {
+      if (state.phase !== 'guessing') return state;
+      if (state.currentGuess.length !== state.wordLength) return state;
+      if (!VALID_WORDS.has(state.currentGuess)) return state; // invalid word — no state change
 
-			const phase: RunState['phase'] = won
-				? 'round_complete'
-				: guessesRemaining === 0
-					? 'game_over'
-					: 'guessing';
+      const result = evaluateGuess(state.currentGuess, state.target);
+      const history = [...state.history, { word: state.currentGuess, result }];
+      const guessesRemaining = state.guessesRemaining - 1;
+      const won = result.every((r) => r.status === 'correct');
 
-			return { history, currentGuess: '', guessesRemaining, phase };
-		}),
+      if (won) {
+        const points = calculateScore(result, guessesRemaining);
+        const newScore = state.score + points;
+        const roundResult: RoundResult = {
+          word: state.target,
+          guessesUsed: MAX_GUESSES - guessesRemaining,
+          pointsEarned: points,
+          won: true,
+        };
+        return {
+          history,
+          currentGuess: '',
+          guessesRemaining,
+          phase: 'round_complete',
+          score: newScore,
+          roundHistory: [...state.roundHistory, roundResult],
+          lastRoundPoints: points,
+        };
+      }
 
-	reset: () => set(initialState),
+      if (guessesRemaining === 0) {
+        const roundResult: RoundResult = {
+          word: state.target,
+          guessesUsed: MAX_GUESSES,
+          pointsEarned: 0,
+          won: false,
+        };
+        return {
+          history,
+          currentGuess: '',
+          guessesRemaining,
+          phase: 'round_complete',
+          roundHistory: [...state.roundHistory, roundResult],
+          lastRoundPoints: 0,
+        };
+      }
+
+      return { history, currentGuess: '', guessesRemaining };
+    }),
+
+  nextRound: () =>
+    set((state) => {
+      const nextRound = state.round + 1;
+
+      if (nextRound > ROUNDS_PER_ANTE) {
+        // Ante clear check
+        if (state.score < state.targetScore) {
+          // Failed to reach target — game over
+          return { phase: 'game_over' };
+        }
+        // Advance to next ante
+        const nextAnte = state.ante + 1;
+        const target = pickWord(state.seed, nextAnte, 1);
+        return {
+          ante: nextAnte,
+          round: 1,
+          targetScore: anteTargetScore(nextAnte),
+          target,
+          wordLength: target.length,
+          guessesRemaining: MAX_GUESSES,
+          history: [],
+          currentGuess: '',
+          phase: 'guessing',
+          lastRoundPoints: null,
+        };
+      }
+
+      // Next round in same ante
+      const target = pickWord(state.seed, state.ante, nextRound);
+      return {
+        round: nextRound,
+        target,
+        wordLength: target.length,
+        guessesRemaining: MAX_GUESSES,
+        history: [],
+        currentGuess: '',
+        phase: 'guessing',
+        lastRoundPoints: null,
+      };
+    }),
 }));
